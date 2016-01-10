@@ -69,6 +69,7 @@ pass (Pass (Framebuffer fboName) (x,y,w,h)) drawCommands =
                   setUniform m44 program "u_model" dcModelTransform
                   setUniform m44 program "u_view" dcViewTransform
                   setUniform m44 program "u_proj" dcProjectionTransform
+                  setUniform v4i program "u_viewport" (V4 x y w h)
                   setUniform
                     m44
                     program

@@ -6,7 +6,7 @@ let
 
   f = { mkDerivation, attoparsec, base, distributive, OpenGLRaw, lens
       , linear, random, sdl2, stdenv, text, transformers, JuicyPixels
-      , wavefront
+      , wavefront, reactive-banana, clock
       }:
       mkDerivation {
         pname = "ssao-example";
@@ -16,7 +16,7 @@ let
         isExecutable = true;
         executableHaskellDepends = [
           base distributive OpenGLRaw lens linear random sdl2 text
-          transformers JuicyPixels wavefront
+          transformers JuicyPixels wavefront reactive-banana clock
         ];
         homepage = "https://github.com/ocharles/ssao-example";
         description = "A demonstration of screen-space ambient occlusion using OpenGL & Haskell";

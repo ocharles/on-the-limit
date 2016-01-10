@@ -9,12 +9,13 @@ uniform sampler2D u_shadowMap;
 uniform vec4 kernel[16];
 uniform sampler2D rotations;
 uniform vec4 uRadius;
+uniform ivec4 u_viewport;
 
 const int KERNEL_SIZE = 16;
 
 void main() {
   // TODO Hardcoding scaling factor. We really should be able to calculate this in the vertex shader
-  vec2 texCoord = gl_FragCoord.xy * vec2(1/1024.0f);
+  vec2 texCoord = gl_FragCoord.xy * vec2(1.0f / u_viewport.z, 1.0f / u_viewport.w);
 
   vec3 origin = v_position.xyz;
 

@@ -310,6 +310,16 @@ v4Array =
                                          (fromIntegral (length value)) .
                      castPtr))
 
+v4i :: Integral a => UniformSetter (V4 a)
+v4i =
+  UniformSetter
+    (\(Program p) uniform value ->
+       do location <-
+            withCString uniform
+                        (glGetUniformLocation p)
+          case fmap fromIntegral value of
+            V4 x y z w -> glProgramUniform4i p location x y z w)
+
 textureUnit :: UniformSetter GLint
 textureUnit =
   UniformSetter

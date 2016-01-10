@@ -32,7 +32,7 @@ executable ssao-example
                 OpenGLRaw >= 3.0.0.0,
                 distributive,
                 vector,
-                JuicyPixels
+                JuicyPixels, reactive-banana, clock
   default-language:    Haskell2010
   ghc-options: -O2 -Wall
   hs-source-dirs: src

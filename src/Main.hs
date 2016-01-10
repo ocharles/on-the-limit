@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 
@@ -6,14 +7,18 @@ module Main where
 
 import Control.Lens.Operators
 import Control.Monad
+import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.State (evalState, state)
 import Data.Foldable
-import Data.Functor.Contravariant.Divisible
+import Data.Function (fix)
 import DebugHook
 import GLObjects
 import Graphics.GL.Core33
 import Linear hiding (basis)
+import Reactive.Banana
+import Reactive.Banana.Frameworks
 import Render
+import System.Clock
 import System.Random (randomR, getStdGen)
 import qualified SDL
 
@@ -124,21 +129,9 @@ generateRoad =
   in uploadTriangles objVertexAttribs
                      [[a,c,b],[a,d,c]]
 
-frame :: FrameData -> Float -> IO ()
-frame FrameData{..} t =
-  do _ <- SDL.pollEvents
-     let modelTransform =
-           scaled (V4 1.0e-2 1.0e-2 1.0e-2 1) & translation .~ shipPosition
-         shipPosition = V3 0 (t - 0.5) 0
-         projTransform = perspective 1.047 1 1 100
-         viewTransform =
-           let r = 7
-           in lookAt (V3 (sin (t * 0.1) * r)
-                      r
-                      (cos (t * 0.1) * r))
-                  0
-                  (V3 0 1 0)
-         drawScene =
+frame :: FrameData -> Scene -> IO ()
+frame FrameData{..} Scene{..} =
+  do let drawScene =
            [DrawCommand {dcVertexArrayObject = shipVao
                         ,dcProgram = ship
                         ,dcTextures = []
@@ -155,11 +148,15 @@ frame FrameData{..} t =
                         ,dcViewTransform = viewTransform
                         ,dcProjectionTransform = projTransform
                         ,dcModelTransform = identity}]
-     pass depthPass (map (\dc -> dc {dcProgram = deferDepth}) drawScene)
+     pass depthPass
+          (map (\dc ->
+                  dc {dcProgram = deferDepth})
+               drawScene)
      pass ssaoPass
           (map (\dc ->
                   dc {dcProgram = ssao
-                     ,dcTextures = [depthTexture,rotationTexture]})
+                     ,dcTextures =
+                        [depthTexture,rotationTexture]})
                drawScene)
      for_ [(ssaoBlurPass1,V2 1 0,ssaoResult)
           ,(ssaoBlurPass2,V2 0 1,ssaoBlurredIntermediate)]
@@ -167,23 +164,31 @@ frame FrameData{..} t =
              pass p
                   [DrawCommand {dcVertexArrayObject = fullScreenTriangle
                                ,dcProgram = blur
-                               ,dcTextures = [source]
+                               ,dcTextures =
+                                  [source]
                                ,dcModelTransform = identity
                                ,dcViewTransform = identity
                                ,dcProjectionTransform = identity
                                ,dcNElements = 3
-                               ,dcUniforms = [("basis",basis)]}])
+                               ,dcUniforms =
+                                  [("basis",basis)]}])
      pass forwardPass
-          (zipWith (\dc t -> dc {dcTextures = [ssaoBlurred,t]})
+          (zipWith (\dc t ->
+                      dc {dcTextures =
+                            [ssaoBlurred,t]})
                    drawScene
                    [feisarDiffuse,asphalt])
-  where fullscreen = (0,0,1024,1024)
-        depthPass = Pass depthFBO fullscreen
-        ssaoPass = Pass ssaoFBO fullscreen
-        ssaoBlurPass1 = Pass ssaoBlurFBO1 fullscreen
-        ssaoBlurPass2 = Pass ssaoBlurFBO2 fullscreen
-        forwardPass = Pass (Framebuffer 0) fullscreen
+  where rtSize = (0,0,1024,1024)
+        depthPass = Pass depthFBO rtSize
+        ssaoPass = Pass ssaoFBO rtSize
+        ssaoBlurPass1 = Pass ssaoBlurFBO1 rtSize
+        ssaoBlurPass2 = Pass ssaoBlurFBO2 rtSize
+        forwardPass =
+          Pass (Framebuffer 0)
+               (0,0,viewport ^. _x,viewport ^. _y)
         fullScreenTriangle = shipVao
+
+initialScreenSize = fromIntegral <$> V2 screenWidth screenHeight
 
 main :: IO ()
 main =
@@ -191,8 +196,7 @@ main =
      win <-
        SDL.createWindow
          "SSAO Example"
-         SDL.defaultWindow {SDL.windowInitialSize =
-                              fromIntegral <$> V2 screenWidth screenHeight
+         SDL.defaultWindow {SDL.windowInitialSize = initialScreenSize
                            ,SDL.windowOpenGL =
                               Just (SDL.defaultOpenGL {SDL.glProfile =
                                                          SDL.Core SDL.Normal 3 3})}
@@ -202,12 +206,107 @@ main =
      glEnable GL_FRAMEBUFFER_SRGB
      installDebugHook
      frameData <- loadFrameData
-     traverse_ (\t ->
-                  do _ <- SDL.pollEvents
-                     frame frameData t
-                     SDL.glSwapWindow win)
-               (iterate (+ 1.0e-2) 0)
-     return ()
+     realTimeLoop win game (frame frameData)
+
+realTimeLoop :: SDL.Window
+             -> (Event SDL.EventPayload -> Event Double -> MomentIO (Behavior a))
+             -> (a -> IO ())
+             -> IO ()
+realTimeLoop win network interpret =
+  do (physicsStepped,progressPhysics) <- newAddHandler
+     (rendered,render) <- newAddHandler
+     (sdlEvent,dispatchSdlEvent) <- newAddHandler
+     let dt = 1 / 120 :: Double
+         step accumulator lastTime =
+           do currentTime <- getTime Monotonic
+              events <- SDL.pollEvents
+              mapM_ (dispatchSdlEvent . SDL.eventPayload) events
+              let frameTime =
+                    fromIntegral (timeSpecAsNanoSecs (diffTimeSpec currentTime lastTime)) *
+                    1.0e-9
+              accumulator' <-
+                fix (\loop accumulator' ->
+                       do if accumulator' >= dt
+                             then do progressPhysics dt
+                                     loop (accumulator - dt)
+                             else return accumulator')
+                    (accumulator + frameTime)
+              render ()
+              SDL.glSwapWindow win
+              step accumulator' currentTime
+     compile (do out <-
+                   join (liftA2 network
+                                (fromAddHandler sdlEvent)
+                                (fromAddHandler physicsStepped))
+                 rendered' <- fromAddHandler rendered
+                 reactimate (fmap interpret out <@ rendered')) >>=
+       actuate
+     getTime Monotonic >>= step 0
+
+data Scene =
+  Scene {modelTransform :: M44 Float
+        ,projTransform :: M44 Float
+        ,viewTransform :: M44 Float
+        ,viewport :: V2 GLint}
+
+game :: (MonadMoment m, MonadFix m)
+     => Event SDL.EventPayload
+     -> Event Double
+     -> m (Behavior Scene)
+game sdlEvent tick =
+  do viewportSize <-
+       stepper initialScreenSize
+               (filterJust
+                  (fmap (\case
+                           SDL.WindowResizedEvent d ->
+                             Just (fmap fromIntegral (SDL.windowResizedEventSize d))
+                           _ -> Nothing)
+                        sdlEvent))
+     time <- accumB 0 (fmap (+) tick)
+     distance <- calculateShipDistance never
+     let modelTransform =
+           fmap (\s ->
+                   scaled (V4 1.0e-2 1.0e-2 1.0e-2 1) & translation .~
+                   V3 0 0 (negate (realToFrac s)))
+                distance
+     let projTransform =
+           fmap (\(V2 w h) ->
+                   perspective 1.047
+                               (w / h)
+                               1
+                               100)
+                (fmap (fmap fromIntegral) viewportSize)
+     viewTransform <-
+       do time <- integrate (pure 1)
+          pure (fmap (\t ->
+                        let r = 7
+                        in lookAt (V3 (sin (t * 0.1) * r)
+                                      r
+                                      (cos (t * 0.1) * r))
+                                  0
+                                  (V3 0 1 0))
+                     (fmap realToFrac time))
+     return (Scene <$> modelTransform <*> projTransform <*> viewTransform <*>
+             fmap (fmap fromIntegral) viewportSize)
+  where calculateShipDistance powerChanged =
+          mdo let mass = 68.2
+                  efficiency = 0.97
+                  forces =
+                    fmap (resistingForces 0 mass) speed
+                  powerNeeded =
+                    fmap (efficiency *) (liftA2 (*) forces speed)
+              speed <-
+                accumB 0
+                       ((\netPower dt v ->
+                           sqrt (v * v + 2 * netPower * dt * efficiency / mass)) <$>
+                        netPower <@> tick)
+              netPower <-
+                stepper 0
+                        ((\needed pwr -> pwr - needed) <$>
+                         powerNeeded <@> powerChanged)
+              integrate speed
+        integrate b =
+          accumB 0 (fmap (+) ((*) <$> b <@> tick))
 
 newSamplingKernel :: IO [V4 Float]
 newSamplingKernel =
@@ -238,3 +337,23 @@ newRotations =
                                pure 0 <*>
                                pure 0)))))
        getStdGen
+
+calculatePowerOutput :: (Floating a, Ord a)
+                     => a -- ^ Gradient of surface, between -1 (down a wall) and 1 (up a wall).
+                     -> a -- ^ Combined weight of the rider, bike & clothing.
+                     -> a -- ^ Velocity of the rider in m/s
+                     -> a
+calculatePowerOutput grade weight velocity =
+  resistingForces grade weight velocity * velocity
+
+resistingForces :: (Floating a, Ord a)
+                => a -> a -> a -> a
+resistingForces grade weight velocity =
+  recip (1 - drivetrainLoss) * (fGravity + fDrag)
+  where fGravity = g * sin (atan grade) * weight
+        fDrag = 0.5 * dragCoeff * frontalArea * rho * velocity * velocity
+          where dragCoeff = 0.63
+                frontalArea = 0.509
+                rho = 1.226
+        g = 9.8067
+        drivetrainLoss = 3.0e-2
