@@ -81,8 +81,8 @@ loadTexture filePath =
              ImageCMYK16 _ -> error "(Image PixelCMYK16)"
              ImageRGBA8 (Image width height pixels) ->
                do t <-
-                    newTexture2D 1
-                                 GL_RGB8
+                    newTexture2D (floor (logBase 2 (fromIntegral (max width height))))
+                                 GL_SRGB8
                                  (fromIntegral width)
                                  (fromIntegral height)
                   SV.unsafeWith
@@ -99,8 +99,8 @@ loadTexture filePath =
                   pure t
              ImageRGB8 (Image width height pixels) ->
                do t <-
-                    newTexture2D 1
-                                 GL_RGB8
+                    newTexture2D (floor (logBase 2 (fromIntegral (max width height))))
+                                 GL_SRGB8
                                  (fromIntegral width)
                                  (fromIntegral height)
                   SV.unsafeWith
@@ -115,6 +115,7 @@ loadTexture filePath =
                                          GL_UNSIGNED_BYTE .
                      castPtr)
                   return t
+     glActiveTexture GL_TEXTURE1
      glGenerateTextureMipmap (textureName t)
      glTextureParameteri (textureName t)
                          GL_TEXTURE_MIN_FILTER

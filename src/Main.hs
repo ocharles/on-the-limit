@@ -199,14 +199,17 @@ main =
          SDL.defaultWindow {SDL.windowInitialSize = initialScreenSize
                            ,SDL.windowOpenGL =
                               Just (SDL.defaultOpenGL {SDL.glProfile =
-                                                         SDL.Core SDL.Normal 3 3})}
+                                                         SDL.Core SDL.Debug 3 3
+                                                      ,SDL.glColorPrecision = 8})}
      SDL.glCreateContext win >>= SDL.glMakeCurrent win
      glEnable GL_DEPTH_TEST
      glEnable GL_CULL_FACE
      glEnable GL_FRAMEBUFFER_SRGB
      installDebugHook
      frameData <- loadFrameData
-     realTimeLoop win game (frame frameData)
+     realTimeLoop win
+                  game
+                  (frame frameData)
 
 realTimeLoop :: SDL.Window
              -> (Event SDL.EventPayload -> Event Double -> MomentIO (Behavior a))
