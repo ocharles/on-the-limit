@@ -54,14 +54,15 @@ loadFrameData =
      asphalt <-
        loadTexture =<< getDataFileName "resources/textures/UVCheckerMap01-1024.png"
      depthRenderbuffer <- newRenderbuffer GL_DEPTH_COMPONENT32F 1024 1024
-     depthTexture <- newTexture2D 1 GL_DEPTH_COMPONENT32F 1024 1024
+     depthTexture <- newTexture2D 1 GL_R32F 1024 1024
      ssaoResult <- newTexture2D 1 GL_R32F 1024 1024
      ssaoBlurredIntermediate <- newTexture2D 1 GL_R32F 1024 1024
      ssaoBlurred <- newTexture2D 1 GL_R32F 1024 1024
      depthFBO <-
        newFramebuffer
          (\case
-            DepthAttachment -> Just (AttachToTexture depthTexture 0)
+            ColorAttachment 0 -> Just (AttachToTexture depthTexture 0)
+            DepthAttachment -> Just (AttachToRenderbuffer depthRenderbuffer)
             _ -> Nothing)
      ssaoFBO <-
        newFramebuffer
@@ -100,6 +101,7 @@ loadFrameData =
              getDataFileName "resources/shaders/ship_fs.glsl")
      do kernel <- newSamplingKernel
         setUniform v4Array ssao "kernel" kernel
+     setUniform textureUnit ssao "u_shadowMap" 0
      setUniform textureUnit ssao "rotations" 1
      setUniform textureUnit ship "diffuseMap" 1
      rotationTexture <- newRotations >>= uploadTexture2D

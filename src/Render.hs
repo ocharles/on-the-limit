@@ -87,6 +87,10 @@ pass (Pass (Framebuffer fboName) (x,y,w,h)) drawCommands =
                              (dcViewTransform !*! dcModelTransform)
                   setUniform m44
                              program
+                             "u_projViewInv"
+                             (inv44 (dcProjectionTransform !*! dcViewTransform))
+                  setUniform m44
+                             program
                              "u_viewModelIT"
                              (distribute (inv44 (dcViewTransform !*! dcModelTransform)))
                   glDrawElements GL_TRIANGLES dcNElements GL_UNSIGNED_INT nullPtr
