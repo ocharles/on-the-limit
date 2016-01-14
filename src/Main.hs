@@ -14,6 +14,7 @@ import Data.Function (fix)
 import DebugHook
 import Foreign
 import GLObjects
+import Graphics.GL.ARB.DirectStateAccess
 import Graphics.GL.Core33
 import Linear hiding (basis)
 import Reactive.Banana
@@ -28,20 +29,23 @@ import Paths_on_the_limit
 data FrameData =
   FrameData {depthFBO :: Framebuffer
             ,ssaoFBO :: Framebuffer
+            ,ssaoBlurFBO1 :: Framebuffer
+            ,ssaoBlurFBO2 :: Framebuffer
+            ,compositeFBO :: Framebuffer
             ,deferDepth :: Program
             ,ssao :: Program
-            ,ssaoBlurred :: Texture
             ,ship :: Program
             ,blur :: Program
+            ,motionBlur :: Program
+            ,composite :: Texture
+            ,ssaoBlurred :: Texture
             ,depthTexture :: Texture
-            ,shipVao :: VertexArrayObject
             ,rotationTexture :: Texture
-            ,ssaoBlurFBO1 :: Framebuffer
             ,ssaoResult :: Texture
-            ,ssaoBlurFBO2 :: Framebuffer
             ,ssaoBlurredIntermediate :: Texture
             ,feisarDiffuse :: Texture
             ,asphalt :: Texture
+            ,shipVao :: VertexArrayObject
             ,road :: VertexArrayObject}
 
 screenWidth, screenHeight :: Int
@@ -52,12 +56,22 @@ loadFrameData =
   do feisarDiffuse <-
        loadTexture =<< getDataFileName "resources/textures/feisar.bmp"
      asphalt <-
-       loadTexture =<< getDataFileName "resources/textures/UVCheckerMap01-1024.png"
+       loadTexture =<<
+       getDataFileName "resources/textures/UVCheckerMap01-1024.png"
      depthRenderbuffer <- newRenderbuffer GL_DEPTH_COMPONENT32F 1024 1024
      depthTexture <- newTexture2D 1 GL_R32F 1024 1024
      ssaoResult <- newTexture2D 1 GL_R32F 1024 1024
      ssaoBlurredIntermediate <- newTexture2D 1 GL_R32F 1024 1024
      ssaoBlurred <- newTexture2D 1 GL_R32F 1024 1024
+     composite <- newTexture2D 1 GL_RGBA8 1024 1024
+     glTextureParameteri (textureName composite) GL_TEXTURE_WRAP_S (fromIntegral GL_CLAMP_TO_BORDER)
+     glTextureParameteri (textureName composite) GL_TEXTURE_WRAP_T (fromIntegral GL_CLAMP_TO_BORDER)
+     compositeFBO <-
+       newFramebuffer
+         (\case
+            ColorAttachment 0 -> Just (AttachToTexture composite 0)
+            DepthAttachment -> Just (AttachToRenderbuffer depthRenderbuffer)
+            _ -> Nothing)
      depthFBO <-
        newFramebuffer
          (\case
@@ -95,6 +109,10 @@ loadFrameData =
        join (loadVertexFragmentProgram <$>
              getDataFileName "resources/shaders/blur_vs.glsl" <*>
              getDataFileName "resources/shaders/blur_fs.glsl")
+     motionBlur <-
+       join (loadVertexFragmentProgram <$>
+             getDataFileName "resources/shaders/blur_vs.glsl" <*>
+             getDataFileName "resources/shaders/motion_blur_fs.glsl")
      ship <-
        join (loadVertexFragmentProgram <$>
              getDataFileName "resources/shaders/ship_vs.glsl" <*>
@@ -104,6 +122,7 @@ loadFrameData =
      setUniform textureUnit ssao "u_shadowMap" 0
      setUniform textureUnit ssao "rotations" 1
      setUniform textureUnit ship "diffuseMap" 1
+     setUniform textureUnit motionBlur "uDepth" 1
      rotationTexture <- newRotations >>= uploadTexture2D
      shipVao <- loadObj =<< getDataFileName "resources/objects/feisar.obj"
      road <- generateRoad 10000
@@ -151,15 +170,11 @@ frame FrameData{..} Scene{..} =
                         ,dcViewTransform = viewTransform
                         ,dcProjectionTransform = projTransform
                         ,dcModelTransform = identity}]
-     pass depthPass
-          (map (\dc ->
-                  dc {dcProgram = deferDepth})
-               drawScene)
+     pass depthPass (map (\dc -> dc {dcProgram = deferDepth}) drawScene)
      pass ssaoPass
           (map (\dc ->
                   dc {dcProgram = ssao
-                     ,dcTextures =
-                        [depthTexture,rotationTexture]})
+                     ,dcTextures = [depthTexture,rotationTexture]})
                drawScene)
      for_ [(ssaoBlurPass1,V2 1 0,ssaoResult)
           ,(ssaoBlurPass2,V2 0 1,ssaoBlurredIntermediate)]
@@ -167,26 +182,33 @@ frame FrameData{..} Scene{..} =
              pass p
                   [DrawCommand {dcVertexArrayObject = fullScreenTriangle
                                ,dcProgram = blur
-                               ,dcTextures =
-                                  [source]
+                               ,dcTextures = [source]
                                ,dcModelTransform = identity
                                ,dcViewTransform = identity
                                ,dcProjectionTransform = identity
                                ,dcNElements = 3
-                               ,dcUniforms =
-                                  [Uniform v2f "basis" basis]}])
-     pass forwardPass
-          (zipWith (\dc t ->
-                      dc {dcTextures =
-                            [ssaoBlurred,t]})
+                               ,dcUniforms = [Uniform v2f "basis" basis]}])
+     pass compositePass
+          (zipWith (\dc t -> dc {dcTextures = [ssaoBlurred,t]})
                    drawScene
                    [feisarDiffuse,asphalt])
+     pass output
+          [DrawCommand {dcVertexArrayObject = fullScreenTriangle
+                       ,dcProgram = motionBlur
+                       ,dcTextures = [composite,depthTexture]
+                       ,dcModelTransform = identity
+                       ,dcViewTransform = viewTransform
+                       ,dcProjectionTransform = projTransform
+                       ,dcNElements = 3
+                       ,dcUniforms =
+                          [Uniform m44 "u_projView_previous" previousProjViewTransform]}]
   where rtSize = (0,0,1024,1024)
         depthPass = Pass depthFBO rtSize
         ssaoPass = Pass ssaoFBO rtSize
         ssaoBlurPass1 = Pass ssaoBlurFBO1 rtSize
         ssaoBlurPass2 = Pass ssaoBlurFBO2 rtSize
-        forwardPass =
+        compositePass = Pass compositeFBO rtSize
+        output =
           Pass (Framebuffer 0)
                (0,0,viewport ^. _x,viewport ^. _y)
         fullScreenTriangle = shipVao
@@ -253,22 +275,14 @@ data Scene =
   Scene {modelTransform :: M44 Float
         ,projTransform :: M44 Float
         ,viewTransform :: M44 Float
+        ,previousProjViewTransform :: M44 Float
         ,viewport :: V2 GLint}
 
 game :: Event SDL.EventPayload
      -> Event Double
      -> MomentIO (Behavior Scene)
 game sdlEvent tick =
-  mdo viewportSize <-
-        stepper initialScreenSize
-                (filterJust
-                   (fmap (\case
-                            SDL.WindowResizedEvent d ->
-                              Just (fmap fromIntegral (SDL.windowResizedEventSize d))
-                            _ -> Nothing)
-                         sdlEvent))
-      time <- accumB 0 (fmap (+) tick)
-      let currentPower =
+  mdo let currentPower =
             fmap (\t ->
                     if t > 10
                        then 0
@@ -276,27 +290,22 @@ game sdlEvent tick =
                  time
           mass = 68.2
           efficiency = 0.97
-          forces =
-            fmap (resistingForces 0 mass) speed
-          powerNeeded =
-            fmap (efficiency *) (liftA2 (*) forces speed)
-      let ifB p a b = (\x y z -> if x then y else z) <$> p <*> a <*> b
+          forces = fmap (resistingForces 0 mass) speed
+          powerNeeded = fmap (efficiency *) (liftA2 (*) forces speed)
+          ifB p a b =
+            (\x y z ->
+               if x
+                  then y
+                  else z) <$>
+            p <*>
+            a <*>
+            b
           accelRatio =
             ifB (fmap (> 0) currentPower)
                 (fmap (** 10) (liftA2 (/) (liftA2 (-) currentPower powerNeeded) currentPower))
                 (pure 0)
-      speed <-
-        accumB 0
-               ((\netPower dt v ->
-                   sqrt (v * v + 2 * netPower * dt * efficiency / mass)) <$>
-                netPower <@> tick)
-      let netPower =
-            liftA2 (-) currentPower powerNeeded
-      distance <- integrate speed
-      let shipPosition =
-            fmap (\s ->
-                    V3 0 1 (id (realToFrac s)))
-                 distance
+          netPower = liftA2 (-) currentPower powerNeeded
+          shipPosition = fmap (\s -> V3 0 1 (id (realToFrac s))) distance
           modelTransform =
             (\s r ->
                m33_to_m44
@@ -308,29 +317,52 @@ game sdlEvent tick =
                s) <$>
             shipPosition <*>
             fmap realToFrac accelRatio
-      let projTransform =
+          projTransform =
             fmap (\(V2 w h) ->
                     perspective 1.047
                                 (w / h)
                                 1
                                 100)
                  (fmap (fmap fromIntegral) viewportSize)
+      speed <-
+        accumB 0
+               ((\netPower dt v ->
+                   sqrt (v * v + 2 * netPower * dt * efficiency / mass)) <$>
+                netPower <@> tick)
+      viewportSize <-
+        stepper initialScreenSize
+                (filterJust
+                   (fmap (\case
+                            SDL.WindowResizedEvent d ->
+                              Just (fmap fromIntegral (SDL.windowResizedEventSize d))
+                            _ -> Nothing)
+                         sdlEvent))
+      time <- accumB 0 (fmap (+) tick)
+      distance <- integrate speed
       viewTransform <-
         do time <- integrate (pure 1)
            pure ((\t p ->
                     let r = 7
                     in lookAt (p +
-                               V3 (-2)
+                               V3 0
                                   3
                                   (-8))
                               p
                               (V3 0 1 0)) <$>
                  fmap realToFrac time <*>
                  shipPosition)
+      prev <- delay ((!*!) <$> projTransform <*> viewTransform) tick
       return (Scene <$> modelTransform <*> projTransform <*> viewTransform <*>
+              prev <*>
               fmap (fmap fromIntegral) viewportSize)
-  where integrate b =
-          accumB 0 (fmap (+) ((*) <$> b <@> tick))
+  where integrate b = accumB 0 (fmap (+) ((*) <$> b <@> tick))
+        delay
+          :: Behavior a -> Event b -> MomentIO (Behavior a)
+        delay b e =
+          do now <- valueB b
+             fmap (fmap fst)
+                  (accumB (now,now)
+                          ((\a (b,_) -> (a,b)) <$> b <@ e))
 
 newSamplingKernel :: IO [V4 Float]
 newSamplingKernel =

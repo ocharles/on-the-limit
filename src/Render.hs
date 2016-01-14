@@ -54,7 +54,7 @@ pass _ [] = return ()
 pass (Pass (Framebuffer fboName) (x,y,w,h)) drawCommands =
   do glBindFramebuffer GL_FRAMEBUFFER fboName
      glViewport x y w h
-     glClearColor 0 0 0 1
+     glClearColor 1 1 1 1
      glClear (GL_COLOR_BUFFER_BIT .|. GL_DEPTH_BUFFER_BIT)
      evalStateT (traverse_ dispatch (sort drawCommands))
                 initialState
@@ -74,7 +74,10 @@ pass (Pass (Framebuffer fboName) (x,y,w,h)) drawCommands =
                   setUniform m44 program "u_model" dcModelTransform
                   setUniform m44 program "u_view" dcViewTransform
                   setUniform m44 program "u_proj" dcProjectionTransform
-                  setUniform v4i program "u_viewport" (V4 x y w h)
+                  setUniform v4i
+                             program
+                             "u_viewport"
+                             (V4 x y w h)
                   setUniform
                     m44
                     program
@@ -85,14 +88,19 @@ pass (Pass (Framebuffer fboName) (x,y,w,h)) drawCommands =
                              program
                              "u_viewModel"
                              (dcViewTransform !*! dcModelTransform)
+                  setUniform
+                    m44
+                    program
+                    "u_viewModelIT"
+                    (distribute (inv44 (dcViewTransform !*! dcModelTransform)))
                   setUniform m44
                              program
                              "u_projViewInv"
                              (inv44 (dcProjectionTransform !*! dcViewTransform))
                   setUniform m44
                              program
-                             "u_viewModelIT"
-                             (distribute (inv44 (dcViewTransform !*! dcModelTransform)))
+                             "u_projView"
+                             (dcProjectionTransform !*! dcViewTransform)
                   glDrawElements GL_TRIANGLES dcNElements GL_UNSIGNED_INT nullPtr
         bind' :: Eq a
               => (a -> StateT CurrentState IO ())
