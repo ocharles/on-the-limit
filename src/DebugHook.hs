@@ -13,7 +13,7 @@ installDebugHook
     do cb <- makeGLDEBUGPROC glCallback
        glDebugMessageCallback cb nullPtr
        glEnable GL_DEBUG_OUTPUT_SYNCHRONOUS
-  | otherwise = return ()
+  | otherwise = putStrLn "KHR_debug not supported"
 
 glCallback :: GLenum
            -> GLenum
