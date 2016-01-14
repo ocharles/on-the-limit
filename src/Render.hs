@@ -1,3 +1,4 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE RecordWildCards #-}
 module Render where
 
@@ -22,7 +23,7 @@ data DrawCommand =
               ,dcModelTransform :: M44 Float
               ,dcViewTransform :: M44 Float
               ,dcProjectionTransform :: M44 Float
-              ,dcUniforms :: [(String,V2 Float)]
+              ,dcUniforms :: [Uniform]
               ,dcNElements :: GLint}
   deriving (Eq,Ord)
 
@@ -34,6 +35,16 @@ data Pass =
 data CurrentState =
   CurrentState {currentProgram :: Program
                ,currentVertexArrayObject :: VertexArrayObject}
+
+data Uniform where
+  Uniform :: UniformSetter a -> String -> a -> Uniform
+
+-- Super suspicious
+instance Eq Uniform where
+  Uniform _ k _ == Uniform _ k' _ = k == k'
+
+instance Ord Uniform where
+  compare (Uniform _ k _) (Uniform _ k' _) = compare k k'
 
 initialState :: CurrentState
 initialState = CurrentState (Program 0) (VertexArrayObject 0)
@@ -57,15 +68,8 @@ pass (Pass (Framebuffer fboName) (x,y,w,h)) drawCommands =
                                            glBindTexture GL_TEXTURE_2D texture)
                                      [0 ..]
                                      dcTextures)
-                  mapM_ (\(n,v) ->
-                           do location <-
-                                withCString n
-                                            (glGetUniformLocation (programName program))
-                              with v
-                                   (glProgramUniform2fv (programName program)
-                                                        location
-                                                        1 .
-                                    castPtr))
+                  mapM_ (\(Uniform setter name value) ->
+                           setUniform setter program name value)
                         dcUniforms
                   setUniform m44 program "u_model" dcModelTransform
                   setUniform m44 program "u_view" dcViewTransform

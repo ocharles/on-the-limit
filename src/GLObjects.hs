@@ -321,6 +321,16 @@ v4i =
           case fmap fromIntegral value of
             V4 x y z w -> glProgramUniform4i p location x y z w)
 
+
+v2f :: UniformSetter (V2 Float)
+v2f =
+  UniformSetter
+    (\(Program p) uniform value ->
+       do location <-
+            withCString uniform
+                        (glGetUniformLocation p)
+          with value (glProgramUniform2fv p location 1 . castPtr))
+
 textureUnit :: UniformSetter GLint
 textureUnit =
   UniformSetter

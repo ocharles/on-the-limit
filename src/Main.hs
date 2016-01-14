@@ -172,7 +172,7 @@ frame FrameData{..} Scene{..} =
                                ,dcProjectionTransform = identity
                                ,dcNElements = 3
                                ,dcUniforms =
-                                  [("basis",basis)]}])
+                                  [Uniform v2f "basis" basis]}])
      pass forwardPass
           (zipWith (\dc t ->
                       dc {dcTextures =
