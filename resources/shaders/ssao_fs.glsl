@@ -1,6 +1,5 @@
 #version 330
 
-in vec4 v_depthCoord;
 in vec3 v_normal;
 in vec3 v_position;
 

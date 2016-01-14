@@ -1,8 +1,6 @@
 #version 330
 
-in vec4 v_texCoord;
 in vec2 v_uv;
-in vec3 v_normal;
 
 uniform sampler2D ssao;
 uniform sampler2D diffuseMap;

@@ -70,6 +70,34 @@ let
           hydraPlatforms = stdenv.lib.platforms.none;
         }) {inherit (pkgs) freeglut; inherit (pkgs) mesa;};
 
+      "linear" = self.callPackage
+        ({ mkDerivation, adjunctions, base, binary, bytes, bytestring
+         , cereal, containers, deepseq, directory, distributive, doctest
+         , filepath, ghc-prim, hashable, HUnit, lens, reflection
+         , semigroupoids, semigroups, simple-reflect, tagged
+         , template-haskell, test-framework, test-framework-hunit
+         , transformers, transformers-compat, unordered-containers, vector
+         , void
+         }:
+         mkDerivation {
+           pname = "linear";
+           version = "1.20.3";
+           sha256 = "50f63a5b6019acb53ae06886749dea80443b18876c2990ca5376578c94537ac4";
+           libraryHaskellDepends = [
+             adjunctions base binary bytes cereal containers deepseq
+             distributive ghc-prim hashable lens reflection semigroupoids
+             semigroups tagged template-haskell transformers transformers-compat
+             unordered-containers vector void
+           ];
+           testHaskellDepends = [
+             base binary bytestring directory doctest filepath HUnit lens
+             simple-reflect test-framework test-framework-hunit
+           ];
+           homepage = "http://github.com/ekmett/linear/";
+           description = "Linear Algebra";
+           license = stdenv.lib.licenses.bsd3;
+         }) {};
+
       wavefront = self.callPackage
         ({ mkDerivation, attoparsec, base, dlist, filepath, mtl, text
          , transformers, vector

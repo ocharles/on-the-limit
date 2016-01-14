@@ -5,6 +5,7 @@ import Control.Monad
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.State.Strict (evalStateT)
 import Control.Monad.Trans.State.Strict (gets, modify, StateT)
+import Data.Distributive (distribute)
 import Data.Foldable (traverse_)
 import Data.List (sort)
 import Foreign hiding (new)
@@ -80,6 +81,10 @@ pass (Pass (Framebuffer fboName) (x,y,w,h)) drawCommands =
                              program
                              "u_viewModel"
                              (dcViewTransform !*! dcModelTransform)
+                  setUniform m44
+                             program
+                             "u_viewModelIT"
+                             (distribute (inv44 (dcViewTransform !*! dcModelTransform)))
                   glDrawElements GL_TRIANGLES dcNElements GL_UNSIGNED_INT nullPtr
         bind' :: Eq a
               => (a -> StateT CurrentState IO ())

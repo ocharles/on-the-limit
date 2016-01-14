@@ -12,6 +12,7 @@ import Control.Monad.Trans.State (evalState, state)
 import Data.Foldable
 import Data.Function (fix)
 import DebugHook
+import Foreign
 import GLObjects
 import Graphics.GL.Core33
 import Linear hiding (basis)
@@ -22,7 +23,7 @@ import System.Clock
 import System.Random (randomR, getStdGen)
 import qualified SDL
 
-import Paths_ssao_example
+import Paths_on_the_limit
 
 data FrameData =
   FrameData {depthFBO :: Framebuffer
@@ -103,29 +104,29 @@ loadFrameData =
      setUniform textureUnit ship "diffuseMap" 1
      rotationTexture <- newRotations >>= uploadTexture2D
      shipVao <- loadObj =<< getDataFileName "resources/objects/feisar.obj"
-     road <- generateRoad
+     road <- generateRoad 10000
      return FrameData {..}
 
-generateRoad :: IO VertexArrayObject
-generateRoad =
+generateRoad :: Float -> IO VertexArrayObject
+generateRoad extent =
   let a =
-        Vertex (V3 (-30) 0 30)
-               (V3 0 60 0)
-               (V2 0 10)
+        Vertex (V3 (negate extent) 0 extent)
+               (V3 0 1 0)
+               (V2 0 (2 * extent))
       b =
-        Vertex (V3 (-30)
+        Vertex (V3 (negate extent)
                    0
-                   (-30))
-               (V3 0 60 0)
+                   (negate extent))
+               (V3 0 1 0)
                (V2 0 0)
       c =
-        Vertex (V3 30 0 (-30))
-               (V3 0 60 0)
-               (V2 10 0)
+        Vertex (V3 extent 0 (negate extent))
+               (V3 0 1 0)
+               (V2 (2 * extent) 0)
       d =
-        Vertex (V3 30 0 30)
-               (V3 0 60 0)
-               (V2 10 10)
+        Vertex (V3 extent 0 extent)
+               (V3 0 1 0)
+               (pure (2 * extent))
   in uploadTriangles objVertexAttribs
                      [[a,c,b],[a,d,c]]
 
@@ -252,63 +253,81 @@ data Scene =
         ,viewTransform :: M44 Float
         ,viewport :: V2 GLint}
 
-game :: (MonadMoment m, MonadFix m)
-     => Event SDL.EventPayload
+game :: Event SDL.EventPayload
      -> Event Double
-     -> m (Behavior Scene)
+     -> MomentIO (Behavior Scene)
 game sdlEvent tick =
-  do viewportSize <-
-       stepper initialScreenSize
-               (filterJust
-                  (fmap (\case
-                           SDL.WindowResizedEvent d ->
-                             Just (fmap fromIntegral (SDL.windowResizedEventSize d))
-                           _ -> Nothing)
-                        sdlEvent))
-     time <- accumB 0 (fmap (+) tick)
-     distance <- calculateShipDistance never
-     let modelTransform =
-           fmap (\s ->
-                   scaled (V4 1.0e-2 1.0e-2 1.0e-2 1) & translation .~
-                   V3 0 0 (negate (realToFrac s)))
-                distance
-     let projTransform =
-           fmap (\(V2 w h) ->
-                   perspective 1.047
-                               (w / h)
-                               1
-                               100)
-                (fmap (fmap fromIntegral) viewportSize)
-     viewTransform <-
-       do time <- integrate (pure 1)
-          pure (fmap (\t ->
-                        let r = 7
-                        in lookAt (V3 (sin (t * 0.1) * r)
-                                      r
-                                      (cos (t * 0.1) * r))
-                                  0
-                                  (V3 0 1 0))
-                     (fmap realToFrac time))
-     return (Scene <$> modelTransform <*> projTransform <*> viewTransform <*>
-             fmap (fmap fromIntegral) viewportSize)
-  where calculateShipDistance powerChanged =
-          mdo let mass = 68.2
-                  efficiency = 0.97
-                  forces =
-                    fmap (resistingForces 0 mass) speed
-                  powerNeeded =
-                    fmap (efficiency *) (liftA2 (*) forces speed)
-              speed <-
-                accumB 0
-                       ((\netPower dt v ->
-                           sqrt (v * v + 2 * netPower * dt * efficiency / mass)) <$>
-                        netPower <@> tick)
-              netPower <-
-                stepper 0
-                        ((\needed pwr -> pwr - needed) <$>
-                         powerNeeded <@> powerChanged)
-              integrate speed
-        integrate b =
+  mdo viewportSize <-
+        stepper initialScreenSize
+                (filterJust
+                   (fmap (\case
+                            SDL.WindowResizedEvent d ->
+                              Just (fmap fromIntegral (SDL.windowResizedEventSize d))
+                            _ -> Nothing)
+                         sdlEvent))
+      time <- accumB 0 (fmap (+) tick)
+      let currentPower =
+            fmap (\t ->
+                    if t > 10
+                       then 0
+                       else 1000)
+                 time
+          mass = 68.2
+          efficiency = 0.97
+          forces =
+            fmap (resistingForces 0 mass) speed
+          powerNeeded =
+            fmap (efficiency *) (liftA2 (*) forces speed)
+      let ifB p a b = (\x y z -> if x then y else z) <$> p <*> a <*> b
+          accelRatio =
+            ifB (fmap (> 0) currentPower)
+                (fmap (** 10) (liftA2 (/) (liftA2 (-) currentPower powerNeeded) currentPower))
+                (pure 0)
+      speed <-
+        accumB 0
+               ((\netPower dt v ->
+                   sqrt (v * v + 2 * netPower * dt * efficiency / mass)) <$>
+                netPower <@> tick)
+      let netPower =
+            liftA2 (-) currentPower powerNeeded
+      distance <- integrate speed
+      let shipPosition =
+            fmap (\s ->
+                    V3 0 1 (id (realToFrac s)))
+                 distance
+          modelTransform =
+            (\s r ->
+               m33_to_m44
+                 (fromQuaternion
+                    (axisAngle (V3 1 0 0)
+                               (negate (pi / 8) * r))) !*!
+               scaled (V4 1.0e-2 1.0e-2 1.0e-2 1) &
+               translation .~
+               s) <$>
+            shipPosition <*>
+            fmap realToFrac accelRatio
+      let projTransform =
+            fmap (\(V2 w h) ->
+                    perspective 1.047
+                                (w / h)
+                                1
+                                100)
+                 (fmap (fmap fromIntegral) viewportSize)
+      viewTransform <-
+        do time <- integrate (pure 1)
+           pure ((\t p ->
+                    let r = 7
+                    in lookAt (p +
+                               V3 (-2)
+                                  3
+                                  (-8))
+                              p
+                              (V3 0 1 0)) <$>
+                 fmap realToFrac time <*>
+                 shipPosition)
+      return (Scene <$> modelTransform <*> projTransform <*> viewTransform <*>
+              fmap (fmap fromIntegral) viewportSize)
+  where integrate b =
           accumB 0 (fmap (+) ((*) <$> b <@> tick))
 
 newSamplingKernel :: IO [V4 Float]
